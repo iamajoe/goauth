@@ -1,0 +1,293 @@
+package goauth
+
+import (
+	"context"
+	"errors"
+
+	"github.com/google/uuid"
+	"github.com/iamajoe/goauth/entity"
+)
+
+type signInResult struct {
+	UserID       uuid.UUID
+	AuthToken    string
+	RefreshToken string
+}
+
+// SignIn enters the user credentials and returns the user if succeeded.
+func (auth Auth) SignIn(ctx context.Context, email string, password string) (signInResult, error) {
+	result := signInResult{}
+
+	if auth.userStorage == nil {
+		return result, errors.New("storage required for sign in")
+	}
+
+	user, err := auth.userStorage.GetUserByEmail(ctx, email)
+	if err != nil {
+		return result, err
+	}
+
+	if ok := comparePassword(user.Password, password); !ok {
+		return result, errors.New("wrong credentials")
+	}
+
+	tokens := make([]entity.Token, 2)
+
+	result.UserID = user.ID
+	secret, expiringTime := getTokenKindSecretAndExpire(
+		entity.TokenKindAuth,
+		auth.secrets,
+		auth.tokenExpirationTimes,
+	)
+	token, err := newToken(entity.TokenKindAuth, user.ID, secret, expiringTime)
+	if err != nil {
+		return result, err
+	}
+	tokens[0] = token
+	result.AuthToken = token.Value
+
+	secret, expiringTime = getTokenKindSecretAndExpire(
+		entity.TokenKindRefresh,
+		auth.secrets,
+		auth.tokenExpirationTimes,
+	)
+	token, err = newToken(entity.TokenKindRefresh, user.ID, secret, expiringTime)
+	if err != nil {
+		return result, err
+	}
+	tokens[1] = token
+	result.RefreshToken = token.Value
+
+	err = auth.tokenStorage.CreateTokens(ctx, tokens)
+	return result, err
+}
+
+// SignOut revokes the users token and session.
+func (auth Auth) SignOut(ctx context.Context, userID uuid.UUID) error {
+	if auth.tokenStorage == nil {
+		return errors.New("storage required for sign out")
+	}
+
+	return auth.tokenStorage.RemoveUserTokens(ctx, userID)
+}
+
+// SignUp registers the user's email and password to the database.
+func (auth Auth) SignUp(
+	ctx context.Context,
+	email string,
+	password string,
+) (uuid.UUID, error) {
+	if auth.userStorage == nil || auth.tokenStorage == nil {
+		return uuid.UUID{}, errors.New("storage required for sign up")
+	}
+
+	if ok, err := validateEmail(email); !ok {
+		return uuid.UUID{}, err
+	}
+
+	if ok, err := validatePassword(password); !ok {
+		return uuid.UUID{}, err
+	}
+
+	registeredUser, _ := auth.userStorage.GetUserByEmail(ctx, email)
+	if registeredUser.Email == email {
+		return uuid.UUID{}, errors.New("user conflict")
+	}
+
+	uid := uuid.New()
+	err := auth.userStorage.CreateUser(ctx, uid, email, encryptPassword(password))
+	if err != nil {
+		return uid, err
+	}
+
+	// DEV: in dev mode we might want to circumvent verification when testing
+	//      things, as such, we automatically verify the user
+	if auth.autoVerifyUser {
+		return uid, auth.userStorage.VerifyUser(ctx, uid)
+	}
+
+	secret, expiringTime := getTokenKindSecretAndExpire(
+		entity.TokenKindVerify,
+		auth.secrets,
+		auth.tokenExpirationTimes,
+	)
+	token, err := newToken(entity.TokenKindVerify, uid, secret, expiringTime)
+	if err != nil {
+		return uid, err
+	}
+
+	err = auth.tokenStorage.CreateTokens(ctx, []entity.Token{token})
+	if err != nil {
+		return uid, err
+	}
+
+	user := entity.AuthUser{ID: uid, Email: email}
+	data := map[string]string{
+		"userID": user.ID.String(),
+		"email":  user.Email,
+		"code":   token.Value,
+	}
+	errs := sendNotification(user, auth.senders, TemplateSignUp, data)
+	if len(errs) == 0 {
+		return uid, nil
+	}
+
+	err = errors.Join(errs...)
+	return uid, err
+}
+
+// SignUpVerify is to be called upon a verification email to complete the signup process
+func (auth Auth) SignUpVerify(ctx context.Context, oneTimeToken string) error {
+	ok, err := auth.tokenStorage.AreTokensRegistered(ctx, []string{oneTimeToken})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("token not registered")
+	}
+
+	userID, err := validateTokenUserID(oneTimeToken, auth.secrets.TokenVerify)
+	if err != nil {
+		return err
+	}
+
+	err = auth.tokenStorage.RemoveUserTokens(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	return auth.userStorage.VerifyUser(ctx, userID)
+}
+
+// RequestResetPassword sends an email for the user to perform the reset password
+func (auth Auth) RequestResetPassword(ctx context.Context, email string) error {
+	if auth.userStorage == nil {
+		return errors.New("storage required for reset password")
+	}
+
+	user, err := auth.userStorage.GetUserByEmail(ctx, email)
+	if err != nil {
+		return err
+	}
+
+	secret, expiringTime := getTokenKindSecretAndExpire(
+		entity.TokenKindResetPassword,
+		auth.secrets,
+		auth.tokenExpirationTimes,
+	)
+	token, err := newToken(
+		entity.TokenKindResetPassword,
+		user.ID,
+		secret,
+		expiringTime,
+	)
+	if err != nil {
+		return err
+	}
+
+	err = auth.tokenStorage.CreateTokens(ctx, []entity.Token{token})
+	if err != nil {
+		return err
+	}
+
+	data := map[string]string{
+		"userID": user.ID.String(),
+		"email":  user.Email,
+		"code":   token.Value,
+	}
+	errs := sendNotification(user, auth.senders, TemplateResetPassword, data)
+	if len(errs) == 0 {
+		return nil
+	}
+
+	return errors.Join(errs...)
+}
+
+// ResetPassword will take the token generated by RequestResetPassword and change the password
+func (auth Auth) ResetPassword(ctx context.Context, oneTimeToken string, password string) error {
+	if auth.userStorage == nil {
+		return errors.New("storage required for reset password")
+	}
+
+	ok, err := auth.tokenStorage.AreTokensRegistered(ctx, []string{oneTimeToken})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("token not registered")
+	}
+
+	secret := auth.secrets.TokenResetPassword
+	userID, err := validateTokenUserID(oneTimeToken, secret)
+	if err != nil {
+		return err
+	}
+
+	err = auth.tokenStorage.RemoveUserTokens(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	return auth.userStorage.UpdateUserPassword(ctx, userID, encryptPassword(password))
+}
+
+// RefreshToken takes auth and refresh tokens and resolves a new auth token
+func (auth Auth) RefreshToken(
+	ctx context.Context,
+	authToken string,
+	refreshToken string,
+) (signInResult, error) {
+	result := signInResult{
+		AuthToken:    authToken,
+		RefreshToken: refreshToken,
+	}
+
+	if auth.tokenStorage == nil {
+		return result, errors.New("storage required for reset password")
+	}
+
+	ok, err := auth.tokenStorage.AreTokensRegistered(ctx, []string{refreshToken})
+	if err != nil {
+		return result, err
+	}
+	if !ok {
+		return result, errors.New("token not registered")
+	}
+
+	authSecret, _ := getTokenKindSecretAndExpire(
+		entity.TokenKindAuth,
+		auth.secrets,
+		auth.tokenExpirationTimes,
+	)
+	refreshSecret, expiringTime := getTokenKindSecretAndExpire(
+		entity.TokenKindRefresh,
+		auth.secrets,
+		auth.tokenExpirationTimes,
+	)
+
+	newToken, err := getRefreshedToken(getRefreshedTokenParams{
+		authToken:     authToken,
+		refreshToken:  refreshToken,
+		authSecret:    authSecret,
+		refreshSecret: refreshSecret,
+		expiringTime:  expiringTime,
+	})
+	if err != nil {
+		return result, err
+	}
+
+	userID, err := validateTokenUserID(authToken, authSecret)
+	if err != nil {
+		return result, err
+	}
+
+	err = auth.tokenStorage.RemoveUserTokensByKind(ctx, userID, entity.TokenKindAuth)
+	if err != nil {
+		return result, err
+	}
+
+	result.AuthToken = newToken.Value
+	err = auth.tokenStorage.CreateTokens(ctx, []entity.Token{newToken})
+
+	return result, err
+}
