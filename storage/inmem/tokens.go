@@ -39,14 +39,14 @@ func (s *tokens) RemoveUserTokens(ctx context.Context, userID uuid.UUID) error {
 	return nil
 }
 
-func (s *tokens) RemoveUserTokensByKind(
+func (s *tokens) RemoveUserToken(
 	ctx context.Context,
 	userID uuid.UUID,
-	kind entity.TokenKind,
+	token string,
 ) error {
 	newTokens := []entity.Token{}
 	for _, t := range s.tokens {
-		if t.UserID == userID && t.Kind == kind {
+		if t.UserID == userID && t.Value == token {
 			continue
 		}
 

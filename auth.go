@@ -38,7 +38,7 @@ type Auth struct {
 type tokenStorage interface {
 	CreateTokens(ctx context.Context, tokens []entity.Token) error
 	RemoveUserTokens(ctx context.Context, userID uuid.UUID) error
-	RemoveUserTokensByKind(ctx context.Context, userID uuid.UUID, kind entity.TokenKind) error
+	RemoveUserToken(ctx context.Context, userID uuid.UUID, token string) error
 	AreTokensRegistered(ctx context.Context, tokens []string) (bool, error)
 }
 

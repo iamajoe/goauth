@@ -281,7 +281,7 @@ func (auth Auth) RefreshToken(
 		return result, err
 	}
 
-	err = auth.tokenStorage.RemoveUserTokensByKind(ctx, userID, entity.TokenKindAuth)
+	err = auth.tokenStorage.RemoveUserToken(ctx, userID, authToken)
 	if err != nil {
 		return result, err
 	}
