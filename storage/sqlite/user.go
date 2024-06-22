@@ -11,11 +11,13 @@ import (
 )
 
 type users struct {
+	db    dbWithTx
 	dbgen func() *dbgen.Queries
 }
 
-func NewUsers(db dbgen.DBTX) *users {
+func NewUsers(db dbWithTx) *users {
 	return &users{
+		db: db,
 		dbgen: func() *dbgen.Queries {
 			return dbgen.New(db)
 		},
