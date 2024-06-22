@@ -10,17 +10,10 @@ all: help
 
 .PHONY:install
 install: ## Install dependencies
-	@$(GOCMD) install github.com/pressly/goose/v3/cmd/goose@latest
-	@$(GOCMD) install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
-	@make build_sql
 	@$(GOCMD) get ./...
 	@$(GOCMD) mod vendor
 	@$(GOCMD) mod tidy
 	@$(GOCMD) mod download
-
-.PHONY:build_sql
-build_sql: ## Builds sql query files
-	DB_HOST=$$DB_HOST DB_USER=$$DB_USER DB_PASSWORD=$$DB_PASSWORD DB_NAME=$$DB_NAME sqlc generate
 
 test_all: ## Run the tests of the project
 	@make vet
