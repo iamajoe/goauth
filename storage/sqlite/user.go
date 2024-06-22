@@ -1,4 +1,4 @@
-package postgresql
+package sqlite
 
 import (
 	"context"
@@ -10,24 +10,20 @@ import (
 	"github.com/iamajoe/goauth/storage/sqlite/dbgen"
 )
 
-const (
-	timestampFormat = "2006-01-02 15:04:05"
-)
-
 type users struct {
-	getDBGen func() *dbgen.Queries
+	dbgen func() *dbgen.Queries
 }
 
 func NewUsers(db dbgen.DBTX) *users {
 	return &users{
-		getDBGen: func() *dbgen.Queries {
+		dbgen: func() *dbgen.Queries {
 			return dbgen.New(db)
 		},
 	}
 }
 
 func (s *users) CreateUser(ctx context.Context, user entity.AuthUser) error {
-	err := s.getDBGen().CreateUser(ctx, dbgen.CreateUserParams{
+	err := s.dbgen().CreateUser(ctx, dbgen.CreateUserParams{
 		ID:    user.ID.String(),
 		Email: user.Email,
 		PhoneNumber: sql.NullString{
@@ -45,7 +41,7 @@ func (s *users) UpdateUserPassword(
 	userID uuid.UUID,
 	password string,
 ) error {
-	err := s.getDBGen().UpdateUserPassword(ctx, dbgen.UpdateUserPasswordParams{
+	err := s.dbgen().UpdateUserPassword(ctx, dbgen.UpdateUserPasswordParams{
 		ID:       userID.String(),
 		Password: password,
 	})
@@ -53,7 +49,7 @@ func (s *users) UpdateUserPassword(
 }
 
 func (s *users) VerifyUser(ctx context.Context, userID uuid.UUID) error {
-	err := s.getDBGen().UpdateUserIsVerified(ctx, dbgen.UpdateUserIsVerifiedParams{
+	err := s.dbgen().UpdateUserIsVerified(ctx, dbgen.UpdateUserIsVerifiedParams{
 		ID: userID.String(),
 		IsVerified: sql.NullBool{
 			Bool:  true,
@@ -100,7 +96,7 @@ func dbUserToAuthUser(dbUser dbgen.AppAuthUser) (entity.AuthUser, error) {
 }
 
 func (s *users) GetUserByID(ctx context.Context, userID uuid.UUID) (entity.AuthUser, error) {
-	dbUser, err := s.getDBGen().GetUserByID(ctx, userID.String())
+	dbUser, err := s.dbgen().GetUserByID(ctx, userID.String())
 	if err != nil {
 		return entity.AuthUser{}, err
 	}
@@ -109,7 +105,7 @@ func (s *users) GetUserByID(ctx context.Context, userID uuid.UUID) (entity.AuthU
 }
 
 func (s *users) GetUserByEmail(ctx context.Context, email string) (entity.AuthUser, error) {
-	dbUser, err := s.getDBGen().GetUserByEmail(ctx, email)
+	dbUser, err := s.dbgen().GetUserByEmail(ctx, email)
 	if err != nil {
 		return entity.AuthUser{}, err
 	}

@@ -8,6 +8,15 @@ import (
 	"database/sql"
 )
 
+type AppAuthToken struct {
+	ID        int64
+	UserID    string
+	Kind      int64
+	Value     string
+	ExpiresAt string
+	CreatedAt sql.NullString
+}
+
 type AppAuthUser struct {
 	ID           string
 	Email        string

@@ -3,18 +3,18 @@ package postgresql
 // TODO:
 
 type users struct {
-	// getDBGen func() *dbgen.Queries
+	// dbgen func() *dbgen.Queries
 }
 
-// func NewUsers(getDBGen func() *dbgen.Queries) *users {
-func NewUsers(getDBGen func() any) *users {
+// func NewUsers(dbgen func() *dbgen.Queries) *users {
+func NewUsers(dbgen func() any) *users {
 	return &users{
-		// getDBGen: getDBGen,
+		// dbgen: dbgen,
 	}
 }
 
 // func (s *users) CreateUser(ctx context.Context, user entity.AuthUser) error {
-// 	err := s.getDBGen().CreateUser(ctx, dbgen.CreateUserParams{
+// 	err := s.dbgen().CreateUser(ctx, dbgen.CreateUserParams{
 // 		ID:          user.ID,
 // 		Email:       user.Email,
 // 		PhoneNumber: user.PhoneNumber,
@@ -30,7 +30,7 @@ func NewUsers(getDBGen func() any) *users {
 // 	userID uuid.UUID,
 // 	password string,
 // ) error {
-// 	err := s.getDBGen().UpdateUserPassword(ctx, dbgen.CreateUserParams{
+// 	err := s.dbgen().UpdateUserPassword(ctx, dbgen.CreateUserParams{
 // 		ID:          user.ID,
 // 		Email:       user.Email,
 // 		PhoneNumber: user.PhoneNumber,
