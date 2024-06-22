@@ -3,15 +3,80 @@ package goauth
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/iamajoe/goauth/entity"
+	"github.com/iamajoe/goauth/sender"
+)
+
+var (
+	ErrStorageRequired    = errors.New("storage required for sign in")
+	ErrWrongCredentials   = errors.New("wrong credentials")
+	ErrUserConflict       = errors.New("user conflict")
+	ErrTokenNotRegistered = errors.New("token not registered")
 )
 
 type signInResult struct {
 	UserID       uuid.UUID
-	AuthToken    string
+	AccessToken  string
 	RefreshToken string
+}
+
+func mapUsersToNotificationData(
+	baseURL string,
+	users []entity.AuthUser,
+	extra map[string]string,
+) []map[string]string {
+	data := []map[string]string{}
+	for _, user := range users {
+		single := map[string]string{
+			"baseURL": baseURL,
+			"userID":  user.ID.String(),
+			"email":   user.Email,
+			"phone":   user.PhoneNumber,
+		}
+
+		if user.Meta != nil {
+			for k, v := range user.Meta {
+				single[k] = v
+			}
+		}
+
+		for k, v := range extra {
+			single[k] = v
+		}
+
+		data = append(data, single)
+	}
+
+	return data
+}
+
+func getTokenKindSecretAndExpire(
+	kind entity.TokenKind,
+	secrets AuthSecrets,
+	expiringTimes AuthTokenExpirationTimes,
+) (string, time.Duration) {
+	var expiringTime time.Duration
+	secret := ""
+
+	switch kind {
+	case entity.TokenKindAccess:
+		secret = secrets.TokenAccess
+		expiringTime = expiringTimes.Access
+	case entity.TokenKindRefresh:
+		secret = secrets.TokenRefresh
+		expiringTime = expiringTimes.Refresh
+	case entity.TokenKindVerify:
+		secret = secrets.TokenVerify
+		expiringTime = expiringTimes.Verify
+	case entity.TokenKindResetPassword:
+		secret = secrets.TokenResetPassword
+		expiringTime = expiringTimes.ResetPassword
+	}
+
+	return secret, expiringTime
 }
 
 // SignIn enters the user credentials and returns the user if succeeded.
@@ -19,7 +84,7 @@ func (auth Auth) SignIn(ctx context.Context, email string, password string) (sig
 	result := signInResult{}
 
 	if auth.userStorage == nil {
-		return result, errors.New("storage required for sign in")
+		return result, ErrStorageRequired
 	}
 
 	user, err := auth.userStorage.GetUserByEmail(ctx, email)
@@ -28,35 +93,35 @@ func (auth Auth) SignIn(ctx context.Context, email string, password string) (sig
 	}
 
 	if ok := comparePassword(user.Password, password); !ok {
-		return result, errors.New("wrong credentials")
+		return result, ErrWrongCredentials
 	}
 
 	tokens := make([]entity.Token, 2)
 
 	result.UserID = user.ID
 	secret, expiringTime := getTokenKindSecretAndExpire(
-		entity.TokenKindAuth,
+		entity.TokenKindAccess,
 		auth.secrets,
 		auth.tokenExpirationTimes,
 	)
-	token, err := newToken(entity.TokenKindAuth, user.ID, secret, expiringTime)
+	tokenValue, err := NewToken(entity.TokenKindAccess, user.ID, secret, expiringTime)
 	if err != nil {
 		return result, err
 	}
-	tokens[0] = token
-	result.AuthToken = token.Value
+	tokens[0] = tokenValue
+	result.AccessToken = tokenValue.Value
 
 	secret, expiringTime = getTokenKindSecretAndExpire(
 		entity.TokenKindRefresh,
 		auth.secrets,
 		auth.tokenExpirationTimes,
 	)
-	token, err = newToken(entity.TokenKindRefresh, user.ID, secret, expiringTime)
+	tokenValue, err = NewToken(entity.TokenKindRefresh, user.ID, secret, expiringTime)
 	if err != nil {
 		return result, err
 	}
-	tokens[1] = token
-	result.RefreshToken = token.Value
+	tokens[1] = tokenValue
+	result.RefreshToken = tokenValue.Value
 
 	err = auth.tokenStorage.CreateTokens(ctx, tokens)
 	return result, err
@@ -65,7 +130,7 @@ func (auth Auth) SignIn(ctx context.Context, email string, password string) (sig
 // SignOut revokes the users token and session.
 func (auth Auth) SignOut(ctx context.Context, userID uuid.UUID) error {
 	if auth.tokenStorage == nil {
-		return errors.New("storage required for sign out")
+		return ErrStorageRequired
 	}
 
 	return auth.tokenStorage.RemoveUserTokens(ctx, userID)
@@ -74,36 +139,37 @@ func (auth Auth) SignOut(ctx context.Context, userID uuid.UUID) error {
 // SignUp registers the user's email and password to the database.
 func (auth Auth) SignUp(
 	ctx context.Context,
-	email string,
-	password string,
+	user entity.AuthUser,
 ) (uuid.UUID, error) {
 	if auth.userStorage == nil || auth.tokenStorage == nil {
-		return uuid.UUID{}, errors.New("storage required for sign up")
+		return uuid.UUID{}, ErrStorageRequired
 	}
 
-	if ok, err := validateEmail(email); !ok {
+	if ok, err := validateEmail(user.Email); !ok {
 		return uuid.UUID{}, err
 	}
 
-	if ok, err := validatePassword(password); !ok {
+	if ok, err := validatePassword(user.Password); !ok {
 		return uuid.UUID{}, err
 	}
 
-	registeredUser, _ := auth.userStorage.GetUserByEmail(ctx, email)
-	if registeredUser.Email == email {
-		return uuid.UUID{}, errors.New("user conflict")
+	registeredUser, _ := auth.userStorage.GetUserByEmail(ctx, user.Email)
+	if registeredUser.Email == user.Email {
+		return uuid.UUID{}, ErrUserConflict
 	}
 
-	uid := uuid.New()
-	err := auth.userStorage.CreateUser(ctx, uid, email, encryptPassword(password))
+	user.ID = uuid.New()
+	user.Password = encryptPassword(user.Password)
+
+	err := auth.userStorage.CreateUser(ctx, user)
 	if err != nil {
-		return uid, err
+		return user.ID, err
 	}
 
 	// DEV: in dev mode we might want to circumvent verification when testing
 	//      things, as such, we automatically verify the user
 	if auth.autoVerifyUser {
-		return uid, auth.userStorage.VerifyUser(ctx, uid)
+		return user.ID, auth.userStorage.VerifyUser(ctx, user.ID)
 	}
 
 	secret, expiringTime := getTokenKindSecretAndExpire(
@@ -111,29 +177,28 @@ func (auth Auth) SignUp(
 		auth.secrets,
 		auth.tokenExpirationTimes,
 	)
-	token, err := newToken(entity.TokenKindVerify, uid, secret, expiringTime)
+	token, err := NewToken(entity.TokenKindVerify, user.ID, secret, expiringTime)
 	if err != nil {
-		return uid, err
+		return user.ID, err
 	}
 
 	err = auth.tokenStorage.CreateTokens(ctx, []entity.Token{token})
 	if err != nil {
-		return uid, err
+		return user.ID, err
 	}
 
-	user := entity.AuthUser{ID: uid, Email: email}
-	data := map[string]string{
-		"userID": user.ID.String(),
-		"email":  user.Email,
-		"code":   token.Value,
-	}
-	errs := sendNotification(user, auth.senders, TemplateSignUp, data)
+	data := mapUsersToNotificationData(
+		auth.baseURL,
+		[]entity.AuthUser{user},
+		map[string]string{"code": token.Value},
+	)
+	errs := sender.SendBulk(auth.senders, sender.TemplateSignUp, data)
 	if len(errs) == 0 {
-		return uid, nil
+		return user.ID, nil
 	}
 
 	err = errors.Join(errs...)
-	return uid, err
+	return user.ID, err
 }
 
 // SignUpVerify is to be called upon a verification email to complete the signup process
@@ -143,10 +208,10 @@ func (auth Auth) SignUpVerify(ctx context.Context, oneTimeToken string) error {
 		return err
 	}
 	if !ok {
-		return errors.New("token not registered")
+		return ErrTokenNotRegistered
 	}
 
-	userID, err := validateTokenUserID(oneTimeToken, auth.secrets.TokenVerify)
+	userID, err := ValidateTokenUserID(oneTimeToken, auth.secrets.TokenVerify)
 	if err != nil {
 		return err
 	}
@@ -162,7 +227,7 @@ func (auth Auth) SignUpVerify(ctx context.Context, oneTimeToken string) error {
 // RequestResetPassword sends an email for the user to perform the reset password
 func (auth Auth) RequestResetPassword(ctx context.Context, email string) error {
 	if auth.userStorage == nil {
-		return errors.New("storage required for reset password")
+		return ErrStorageRequired
 	}
 
 	user, err := auth.userStorage.GetUserByEmail(ctx, email)
@@ -175,7 +240,7 @@ func (auth Auth) RequestResetPassword(ctx context.Context, email string) error {
 		auth.secrets,
 		auth.tokenExpirationTimes,
 	)
-	token, err := newToken(
+	token, err := NewToken(
 		entity.TokenKindResetPassword,
 		user.ID,
 		secret,
@@ -190,12 +255,12 @@ func (auth Auth) RequestResetPassword(ctx context.Context, email string) error {
 		return err
 	}
 
-	data := map[string]string{
-		"userID": user.ID.String(),
-		"email":  user.Email,
-		"code":   token.Value,
-	}
-	errs := sendNotification(user, auth.senders, TemplateResetPassword, data)
+	data := mapUsersToNotificationData(
+		auth.baseURL,
+		[]entity.AuthUser{user},
+		map[string]string{"code": token.Value},
+	)
+	errs := sender.SendBulk(auth.senders, sender.TemplateResetPassword, data)
 	if len(errs) == 0 {
 		return nil
 	}
@@ -206,7 +271,7 @@ func (auth Auth) RequestResetPassword(ctx context.Context, email string) error {
 // ResetPassword will take the token generated by RequestResetPassword and change the password
 func (auth Auth) ResetPassword(ctx context.Context, oneTimeToken string, password string) error {
 	if auth.userStorage == nil {
-		return errors.New("storage required for reset password")
+		return ErrStorageRequired
 	}
 
 	ok, err := auth.tokenStorage.AreTokensRegistered(ctx, []string{oneTimeToken})
@@ -214,11 +279,11 @@ func (auth Auth) ResetPassword(ctx context.Context, oneTimeToken string, passwor
 		return err
 	}
 	if !ok {
-		return errors.New("token not registered")
+		return ErrTokenNotRegistered
 	}
 
 	secret := auth.secrets.TokenResetPassword
-	userID, err := validateTokenUserID(oneTimeToken, secret)
+	userID, err := ValidateTokenUserID(oneTimeToken, secret)
 	if err != nil {
 		return err
 	}
@@ -234,16 +299,16 @@ func (auth Auth) ResetPassword(ctx context.Context, oneTimeToken string, passwor
 // RefreshToken takes auth and refresh tokens and resolves a new auth token
 func (auth Auth) RefreshToken(
 	ctx context.Context,
-	authToken string,
+	accessToken string,
 	refreshToken string,
 ) (signInResult, error) {
 	result := signInResult{
-		AuthToken:    authToken,
+		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 	}
 
 	if auth.tokenStorage == nil {
-		return result, errors.New("storage required for reset password")
+		return result, ErrStorageRequired
 	}
 
 	ok, err := auth.tokenStorage.AreTokensRegistered(ctx, []string{refreshToken})
@@ -251,11 +316,11 @@ func (auth Auth) RefreshToken(
 		return result, err
 	}
 	if !ok {
-		return result, errors.New("token not registered")
+		return result, ErrTokenNotRegistered
 	}
 
 	authSecret, _ := getTokenKindSecretAndExpire(
-		entity.TokenKindAuth,
+		entity.TokenKindAccess,
 		auth.secrets,
 		auth.tokenExpirationTimes,
 	)
@@ -265,28 +330,28 @@ func (auth Auth) RefreshToken(
 		auth.tokenExpirationTimes,
 	)
 
-	newToken, err := getRefreshedToken(getRefreshedTokenParams{
-		authToken:     authToken,
-		refreshToken:  refreshToken,
-		authSecret:    authSecret,
-		refreshSecret: refreshSecret,
-		expiringTime:  expiringTime,
+	newToken, err := GetRefreshedToken(GetRefreshedTokenParams{
+		AccessToken:   accessToken,
+		RefreshToken:  refreshToken,
+		AuthSecret:    authSecret,
+		RefreshSecret: refreshSecret,
+		ExpiringTime:  expiringTime,
 	})
 	if err != nil {
 		return result, err
 	}
 
-	userID, err := validateTokenUserID(authToken, authSecret)
+	userID, err := ValidateTokenUserID(accessToken, authSecret)
 	if err != nil {
 		return result, err
 	}
 
-	err = auth.tokenStorage.RemoveUserToken(ctx, userID, authToken)
+	err = auth.tokenStorage.RemoveUserToken(ctx, userID, accessToken)
 	if err != nil {
 		return result, err
 	}
 
-	result.AuthToken = newToken.Value
+	result.AccessToken = newToken.Value
 	err = auth.tokenStorage.CreateTokens(ctx, []entity.Token{newToken})
 
 	return result, err

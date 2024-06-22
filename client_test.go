@@ -63,7 +63,7 @@ func TestSignIn(t *testing.T) {
 
 			auth := New(
 				AuthSecrets{
-					TokenAuth:          "1234",
+					TokenAccess:        "1234",
 					TokenRefresh:       "2345",
 					TokenVerify:        "3456",
 					TokenResetPassword: "4567",
@@ -86,22 +86,22 @@ func TestSignIn(t *testing.T) {
 
 			// check if tokens were saved in storage
 			tokens, _ := tokenStore.GetAll(context.Background())
-			authTokenFound := false
+			accessTokenFound := false
 			refreshTokenFound := false
 			for _, t := range tokens {
 				if t.UserID != user.ID {
 					continue
 				}
 
-				if t.Kind == entity.TokenKindAuth && t.Value == res.AuthToken {
-					authTokenFound = true
+				if t.Kind == entity.TokenKindAccess && t.Value == res.AccessToken {
+					accessTokenFound = true
 				} else if t.Kind == entity.TokenKindRefresh && t.Value == res.RefreshToken {
 					refreshTokenFound = true
 				}
 			}
 
-			if !authTokenFound {
-				t.Fatal("expected: an AuthToken")
+			if !accessTokenFound {
+				t.Fatal("expected: an AccessToken")
 			}
 
 			if !refreshTokenFound {
@@ -146,11 +146,10 @@ func TestSignOut(t *testing.T) {
 			// give tokens to all registered users
 			tokens := []entity.Token{}
 			users, _ := userStore.GetAll(context.Background())
-			tokenTime := time.Now().Add(time.Minute)
 
 			var user entity.AuthUser
 			for _, u := range users {
-				tok, _ := newToken(entity.TokenKindAuth, u.ID, "1234", tokenTime)
+				tok, _ := NewToken(entity.TokenKindAccess, u.ID, "1234", time.Minute)
 				tokens = append(tokens, tok)
 
 				// find the user subject of the test
@@ -161,7 +160,7 @@ func TestSignOut(t *testing.T) {
 			tokenStore := inmem.NewTokens(tokens)
 
 			auth := New(
-				AuthSecrets{TokenAuth: "1234"},
+				AuthSecrets{TokenAccess: "1234"},
 				WithTokenStorage(tokenStore),
 				WithUserStorage(userStore),
 			)
@@ -230,7 +229,7 @@ func TestSignUp(t *testing.T) {
 			userStore := inmem.NewUsers(testCase.inUsers)
 			auth := New(
 				AuthSecrets{
-					TokenAuth:          "1234",
+					TokenAccess:        "1234",
 					TokenRefresh:       "2345",
 					TokenVerify:        "3456",
 					TokenResetPassword: "4567",
@@ -239,7 +238,10 @@ func TestSignUp(t *testing.T) {
 				WithUserStorage(userStore),
 			)
 
-			res, err := auth.SignUp(context.Background(), testCase.inEmail, testCase.inPassword)
+			res, err := auth.SignUp(context.Background(), entity.AuthUser{
+				Email:    testCase.inEmail,
+				Password: testCase.inPassword,
+			})
 			if err != nil {
 				if testCase.expectError {
 					return
@@ -283,7 +285,7 @@ func TestSignUpVerify(t *testing.T) {
 			userStore := inmem.NewUsers([]entity.AuthUser{})
 			auth := New(
 				AuthSecrets{
-					TokenAuth:          "1234",
+					TokenAccess:        "1234",
 					TokenRefresh:       "2345",
 					TokenVerify:        "3456",
 					TokenResetPassword: "4567",
@@ -292,26 +294,29 @@ func TestSignUpVerify(t *testing.T) {
 				WithUserStorage(userStore),
 			)
 
-			var token string
-			userID, _ := auth.SignUp(context.Background(), "foo@bar.com", "12345678")
+			var tokenValue string
+			userID, _ := auth.SignUp(context.Background(), entity.AuthUser{
+				Email:    "foo@bar.com",
+				Password: "12345678",
+			})
 			if testCase.inWrongToken {
-				rawToken, _ := newToken(
-					entity.TokenKindAuth, userID,
-					auth.secrets.TokenAuth,
-					time.Now().Add(time.Hour),
+				rawToken, _ := NewToken(
+					entity.TokenKindAccess, userID,
+					auth.secrets.TokenAccess,
+					time.Hour,
 				)
-				token = rawToken.Value
+				tokenValue = rawToken.Value
 			} else {
 				tokens, _ := tokenStore.GetAll(context.Background())
 				for _, tok := range tokens {
 					if tok.UserID == userID && tok.Kind == entity.TokenKindVerify {
-						token = tok.Value
+						tokenValue = tok.Value
 						break
 					}
 				}
 			}
 
-			err := auth.SignUpVerify(context.Background(), token)
+			err := auth.SignUpVerify(context.Background(), tokenValue)
 			if err != nil {
 				if testCase.expectError {
 					return
@@ -370,7 +375,7 @@ func TestRequestResetPassword(t *testing.T) {
 			userStore := inmem.NewUsers(testCase.inUsers)
 			auth := New(
 				AuthSecrets{
-					TokenAuth:          "1234",
+					TokenAccess:        "1234",
 					TokenRefresh:       "2345",
 					TokenVerify:        "3456",
 					TokenResetPassword: "4567",
@@ -435,7 +440,7 @@ func TestResetPassword(t *testing.T) {
 			userStore := inmem.NewUsers([]entity.AuthUser{})
 			auth := New(
 				AuthSecrets{
-					TokenAuth:          "1234",
+					TokenAccess:        "1234",
 					TokenRefresh:       "2345",
 					TokenVerify:        "3456",
 					TokenResetPassword: "4567",
@@ -444,31 +449,34 @@ func TestResetPassword(t *testing.T) {
 				WithUserStorage(userStore),
 			)
 
-			var token string
+			var tokenValue string
 			email := "foo@bar.com"
 			oldPassword := "12345678"
-			userID, _ := auth.SignUp(context.Background(), email, oldPassword)
+			userID, _ := auth.SignUp(context.Background(), entity.AuthUser{
+				Email:    email,
+				Password: oldPassword,
+			})
 			_ = auth.RequestResetPassword(context.Background(), email)
 
 			if testCase.inWrongToken {
-				rawToken, _ := newToken(
-					entity.TokenKindAuth, userID,
-					auth.secrets.TokenAuth,
-					time.Now().Add(time.Hour),
+				rawToken, _ := NewToken(
+					entity.TokenKindAccess, userID,
+					auth.secrets.TokenAccess,
+					time.Hour,
 				)
-				token = rawToken.Value
+				tokenValue = rawToken.Value
 			} else {
 				tokens, _ := tokenStore.GetAll(context.Background())
 				for _, tok := range tokens {
 					if tok.UserID == userID && tok.Kind == entity.TokenKindResetPassword {
-						token = tok.Value
+						tokenValue = tok.Value
 						break
 					}
 				}
 			}
 
 			newPassword := "87654321"
-			err := auth.ResetPassword(context.Background(), token, newPassword)
+			err := auth.ResetPassword(context.Background(), tokenValue, newPassword)
 			if err != nil {
 				if testCase.expectError {
 					return
@@ -482,12 +490,12 @@ func TestResetPassword(t *testing.T) {
 
 			// check if the password has changed
 			res, _ := auth.SignIn(context.Background(), email, newPassword)
-			if len(res.AuthToken) == 0 {
+			if len(res.AccessToken) == 0 {
 				t.Fatal("expected: password to be changed per the new")
 			}
 
 			res, _ = auth.SignIn(context.Background(), email, oldPassword)
-			if len(res.AuthToken) != 0 {
+			if len(res.AccessToken) != 0 {
 				t.Fatal("expected: old password to be changed")
 			}
 
@@ -518,7 +526,7 @@ func TestRefreshToken(t *testing.T) {
 			userStore := inmem.NewUsers([]entity.AuthUser{})
 			auth := New(
 				AuthSecrets{
-					TokenAuth:          "1234",
+					TokenAccess:        "1234",
 					TokenRefresh:       "2345",
 					TokenVerify:        "3456",
 					TokenResetPassword: "4567",
@@ -529,21 +537,24 @@ func TestRefreshToken(t *testing.T) {
 
 			email := "foo@bar.com"
 			password := "12345678"
-			userID, _ := auth.SignUp(context.Background(), email, password)
+			userID, _ := auth.SignUp(context.Background(), entity.AuthUser{
+				Email:    email,
+				Password: password,
+			})
 			oldTokens, _ := auth.SignIn(context.Background(), email, password)
 
 			if testCase.inWrongToken {
-				rawToken, _ := newToken(
-					entity.TokenKindAuth, userID,
-					auth.secrets.TokenAuth,
-					time.Now().Add(time.Hour),
+				rawToken, _ := NewToken(
+					entity.TokenKindAccess, userID,
+					auth.secrets.TokenAccess,
+					time.Hour,
 				)
 				oldTokens.RefreshToken = rawToken.Value
 			}
 
 			newTokens, err := auth.RefreshToken(
 				context.Background(),
-				oldTokens.AuthToken,
+				oldTokens.AccessToken,
 				oldTokens.RefreshToken,
 			)
 			if err != nil {
@@ -565,7 +576,7 @@ func TestRefreshToken(t *testing.T) {
 				)
 			}
 
-			tokenID, _ := validateTokenUserID(newTokens.AuthToken, auth.secrets.TokenAuth)
+			tokenID, _ := ValidateTokenUserID(newTokens.AccessToken, auth.secrets.TokenAccess)
 			if tokenID != userID {
 				t.Fatalf("expected: token user id=%v\ngot: %v", userID, tokenID)
 			}
@@ -574,13 +585,13 @@ func TestRefreshToken(t *testing.T) {
 			tokens, _ := tokenStore.GetAll(context.Background())
 			tokenFound := false
 			for _, tok := range tokens {
-				if tok.Value == oldTokens.AuthToken {
+				if tok.Value == oldTokens.AccessToken {
 					t.Fatal("expected: old auth token to have been removed")
 				}
 
 				if tok.UserID == userID &&
-					tok.Kind == entity.TokenKindAuth &&
-					tok.Value == newTokens.AuthToken {
+					tok.Kind == entity.TokenKindAccess &&
+					tok.Value == newTokens.AccessToken {
 					tokenFound = true
 				}
 			}

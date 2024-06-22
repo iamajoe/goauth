@@ -11,23 +11,23 @@ import (
 var newAndValidateTokenTests = []struct {
 	description string
 	inSecret    string
-	inExpTime   time.Time
+	inExpTime   time.Duration
 	expectError bool
 }{
 	{
 		"simple secret",
 		"1234",
-		time.Now().Add(time.Minute),
+		time.Minute,
 		false,
 	}, {
 		"32 byte secret",
 		"oFrwpoI22JNpRa570EEtA9j8ns8DNG27BpNnxGtsAjJfnhd+8I/7TniU7gYZpGWu",
-		time.Now().Add(time.Minute),
+		time.Minute,
 		false,
 	}, {
 		"time expired",
 		"1234",
-		time.Now().Add(time.Minute * -1),
+		time.Minute * -1,
 		true,
 	},
 }
@@ -36,8 +36,8 @@ func TestNewAndValidateToken(t *testing.T) {
 	for _, testCase := range newAndValidateTokenTests {
 		t.Run(testCase.description, func(t *testing.T) {
 			userID := uuid.New()
-			token, err := newToken(
-				entity.TokenKindAuth,
+			token, err := NewToken(
+				entity.TokenKindAccess,
 				userID,
 				testCase.inSecret,
 				testCase.inExpTime,
@@ -49,7 +49,7 @@ func TestNewAndValidateToken(t *testing.T) {
 				t.Fatalf("expected: non error on newToken and got %v", err)
 			}
 
-			res, err := validateTokenUserID(token.Value, testCase.inSecret)
+			res, err := ValidateTokenUserID(token.Value, testCase.inSecret)
 			if err != nil {
 				if testCase.expectError {
 					return
@@ -74,17 +74,17 @@ var getRefreshedTokenTests = []struct {
 	inAuthKind      entity.TokenKind
 	inAuthUserID    uuid.UUID
 	inRefreshKind   entity.TokenKind
-	inRefreshTime   time.Time
+	inRefreshTime   time.Duration
 	inRefreshUserID uuid.UUID
 
 	expectError bool
 }{
 	{
 		"refresh",
-		entity.TokenKindAuth,
+		entity.TokenKindAccess,
 		uuid.UUID{},
 		entity.TokenKindRefresh,
-		time.Now().Add(time.Minute),
+		time.Minute,
 		uuid.UUID{},
 		false,
 	},
@@ -93,50 +93,54 @@ var getRefreshedTokenTests = []struct {
 		entity.TokenKindRefresh,
 		uuid.UUID{},
 		entity.TokenKindRefresh,
-		time.Now().Add(time.Minute),
+		time.Minute,
 		uuid.UUID{},
 		true,
 	},
 	{
 		"wrong refresh kind",
-		entity.TokenKindAuth,
+		entity.TokenKindAccess,
 		uuid.UUID{},
-		entity.TokenKindAuth,
-		time.Now().Add(time.Minute),
+		entity.TokenKindAccess,
+		time.Minute,
 		uuid.UUID{},
 		true,
 	},
 	{
 		"wrong user",
-		entity.TokenKindAuth,
+		entity.TokenKindAccess,
 		uuid.New(),
 		entity.TokenKindRefresh,
-		time.Now().Add(time.Minute),
+		time.Minute,
 		uuid.New(),
 		true,
 	},
 	{
 		"refresh expired",
-		entity.TokenKindAuth,
+		entity.TokenKindAccess,
 		uuid.UUID{},
 		entity.TokenKindRefresh,
-		time.Now().Add(time.Minute * -1),
+		time.Minute * -1,
 		uuid.UUID{},
 		true,
 	},
 }
 
 func TestGetRefreshedToken(t *testing.T) {
-	secrets := AuthSecrets{TokenAuth: "1234", TokenRefresh: "5678"}
+	secrets := struct {
+		TokenAuth    string
+		TokenRefresh string
+	}{TokenAuth: "1234", TokenRefresh: "5678"}
+
 	for _, testCase := range getRefreshedTokenTests {
 		t.Run(testCase.description, func(t *testing.T) {
-			authToken, _ := newToken(
+			accessToken, _ := NewToken(
 				testCase.inAuthKind,
 				testCase.inAuthUserID,
 				secrets.TokenAuth,
-				time.Now(),
+				time.Millisecond,
 			)
-			refreshToken, _ := newToken(
+			refreshToken, _ := NewToken(
 				testCase.inRefreshKind,
 				testCase.inRefreshUserID,
 				secrets.TokenRefresh,
@@ -144,7 +148,7 @@ func TestGetRefreshedToken(t *testing.T) {
 			)
 
 			authSecret := secrets.TokenAuth
-			if testCase.inAuthKind != entity.TokenKindAuth {
+			if testCase.inAuthKind != entity.TokenKindAccess {
 				authSecret = secrets.TokenRefresh
 			}
 
@@ -153,12 +157,12 @@ func TestGetRefreshedToken(t *testing.T) {
 				refreshSecret = secrets.TokenAuth
 			}
 
-			res, err := getRefreshedToken(getRefreshedTokenParams{
-				authToken:     authToken.Value,
-				refreshToken:  refreshToken.Value,
-				authSecret:    authSecret,
-				refreshSecret: refreshSecret,
-				expiringTime:  time.Now().Add(time.Minute * 10),
+			res, err := GetRefreshedToken(GetRefreshedTokenParams{
+				AccessToken:   accessToken.Value,
+				RefreshToken:  refreshToken.Value,
+				AuthSecret:    authSecret,
+				RefreshSecret: refreshSecret,
+				ExpiringTime:  time.Minute * 10,
 			})
 			if err != nil {
 				if testCase.expectError {
@@ -167,7 +171,7 @@ func TestGetRefreshedToken(t *testing.T) {
 				t.Fatalf("expected: non error on getRefreshedToken and got %v", err)
 			}
 
-			_, err = validateTokenUserID(res.Value, secrets.TokenAuth)
+			_, err = ValidateTokenUserID(res.Value, secrets.TokenAuth)
 			if err != nil {
 				if testCase.expectError {
 					return

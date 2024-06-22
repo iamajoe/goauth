@@ -9,7 +9,7 @@ import (
 type TokenKind int
 
 const (
-	TokenKindAuth TokenKind = iota
+	TokenKindAccess TokenKind = iota
 	TokenKindRefresh
 	TokenKindVerify
 	TokenKindResetPassword

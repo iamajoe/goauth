@@ -1,0 +1,19 @@
+version: "2"
+cloud:
+  project: "goauth"
+sql:
+- schema: "migrations/"
+  queries: "queries/"
+  engine: "sqlite"
+  gen:
+    go: 
+      package: "dbgen"
+      out: "dbgen"
+      overrides:
+      - db_type: "uuid"
+        go_type:
+          import: "github.com/google/uuid"
+          type: "UUID"
+  rules:
+    - sqlc/db-prepare
+

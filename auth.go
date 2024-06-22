@@ -6,20 +6,21 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/iamajoe/goauth/entity"
+	"github.com/iamajoe/goauth/sender"
 )
 
 type AuthSecrets struct {
-	TokenAuth          string
+	TokenAccess        string
 	TokenRefresh       string
 	TokenVerify        string
 	TokenResetPassword string
 }
 
 type AuthTokenExpirationTimes struct {
-	Auth          time.Time
-	Refresh       time.Time
-	Verify        time.Time
-	ResetPassword time.Time
+	Access        time.Duration
+	Refresh       time.Duration
+	Verify        time.Duration
+	ResetPassword time.Duration
 }
 
 // TODO: custom client methods
@@ -30,9 +31,10 @@ type Auth struct {
 
 	tokenStorage tokenStorage
 	userStorage  userStorage
-	senders      []sender
+	senders      []sender.Sender
 
 	autoVerifyUser bool
+	baseURL        string
 }
 
 type tokenStorage interface {
@@ -43,7 +45,7 @@ type tokenStorage interface {
 }
 
 type userStorage interface {
-	CreateUser(ctx context.Context, userID uuid.UUID, email string, password string) error
+	CreateUser(ctx context.Context, user entity.AuthUser) error
 	UpdateUserPassword(ctx context.Context, userID uuid.UUID, password string) error
 	VerifyUser(ctx context.Context, userID uuid.UUID) error
 	GetUserByID(ctx context.Context, userID uuid.UUID) (entity.AuthUser, error)
@@ -56,11 +58,12 @@ func New(secrets AuthSecrets, opts ...optFn) *Auth {
 	auth := &Auth{
 		secrets: secrets,
 		tokenExpirationTimes: AuthTokenExpirationTimes{
-			Auth:          time.Now().Add(1 * 24 * time.Hour),
-			Refresh:       time.Now().Add(7 * 24 * time.Hour),
-			Verify:        time.Now().Add(1 * 24 * time.Hour),
-			ResetPassword: time.Now().Add(1 * 24 * time.Hour),
+			Access:        1 * 24 * time.Hour,
+			Refresh:       7 * 24 * time.Hour,
+			Verify:        1 * 24 * time.Hour,
+			ResetPassword: 1 * 24 * time.Hour,
 		},
+		baseURL: "http://localhost",
 	}
 
 	return auth.SetOpts(opts...)
@@ -100,7 +103,7 @@ func WithTokenExpirationTimes(times AuthTokenExpirationTimes) optFn {
 }
 
 // WithSender sets a sender provider, for example to send an email upon SignUp
-func WithSender(s sender) optFn {
+func WithSender(s sender.Sender) optFn {
 	return func(auth *Auth) *Auth {
 		auth.senders = append(auth.senders, s)
 		return auth
@@ -113,6 +116,14 @@ func WithSender(s sender) optFn {
 func WithAutoVerifyUser() optFn {
 	return func(auth *Auth) *Auth {
 		auth.autoVerifyUser = true
+		return auth
+	}
+}
+
+// WithBaseURL sets the base url ot be used for example on the email links
+func WithBaseURL(baseURL string) optFn {
+	return func(auth *Auth) *Auth {
+		auth.baseURL = baseURL
 		return auth
 	}
 }

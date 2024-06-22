@@ -2,10 +2,10 @@ package inmem
 
 import (
 	"context"
-	"errors"
 
 	"github.com/google/uuid"
 	"github.com/iamajoe/goauth/entity"
+	"github.com/iamajoe/goauth/storage"
 )
 
 type users struct {
@@ -22,16 +22,11 @@ func (s *users) GetAll(ctx context.Context) ([]entity.AuthUser, error) {
 	return s.users, nil
 }
 
-func (s *users) CreateUser(
-	ctx context.Context,
-	userID uuid.UUID,
-	email string,
-	password string,
-) error {
+func (s *users) CreateUser(ctx context.Context, user entity.AuthUser) error {
 	s.users = append(s.users, entity.AuthUser{
-		ID:       userID,
-		Email:    email,
-		Password: password,
+		ID:       user.ID,
+		Email:    user.Email,
+		Password: user.Password,
 	})
 
 	return nil
@@ -76,7 +71,7 @@ func (s *users) GetUserByID(ctx context.Context, userID uuid.UUID) (entity.AuthU
 		}
 	}
 
-	return entity.AuthUser{}, errors.New("user not found")
+	return entity.AuthUser{}, storage.ErrUserNotFound
 }
 
 func (s *users) GetUserByEmail(ctx context.Context, email string) (entity.AuthUser, error) {
@@ -86,5 +81,5 @@ func (s *users) GetUserByEmail(ctx context.Context, email string) (entity.AuthUs
 		}
 	}
 
-	return entity.AuthUser{}, errors.New("user not found")
+	return entity.AuthUser{}, storage.ErrUserNotFound
 }

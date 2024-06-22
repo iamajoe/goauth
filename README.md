@@ -17,7 +17,7 @@ auth := goauth.New(
 if os.Getenv() == "development" {
   auth = auth.SetOpts(
     goauth.WithAutoVerifyUser(), 
-    goauth.WithTokenExpirationTimes(goauth.AuthTokenExpirationTimes{
+    goauth.WithTokenExpirationTimes(goauth.AccessTokenExpirationTimes{
       Auth:          time.Now().Add(365 * 24 * time.Hour),
       Refresh:       time.Now().Add(7 * 24 * time.Hour),
       Verify:        time.Now().Add(1 * 24 * time.Hour),
@@ -36,7 +36,7 @@ if os.Getenv() == "development" {
 // SignIn enters the user credentials and returns the user if succeeded.
 goauth.SignIn(ctx context.Context, email string, password string) (struct{
   UserID       uuid.UUID
-  AuthToken    string
+  AccessToken    string
   RefreshToken string
 }, error)
 
@@ -56,9 +56,9 @@ goauth.RequestResetPassword(ctx context.Context, email string) error
 goauth.ResetPassword(ctx context.Context, oneTimeToken string, password string) error
 
 // RefreshToken takes auth and refresh tokens and resolves a new auth token
-goauth.RefreshToken(ctx context.Context, authToken string, refreshToken string) (struct{
+goauth.RefreshToken(ctx context.Context, accessToken string, refreshToken string) (struct{
   UserID       uuid.UUID
-  AuthToken    string
+  AccessToken    string
   RefreshToken string
 }, error)
 ```

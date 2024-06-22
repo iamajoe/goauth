@@ -2,6 +2,7 @@ package goauth
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt"
@@ -9,13 +10,16 @@ import (
 	"github.com/iamajoe/goauth/entity"
 )
 
-const (
-	expirationTimeError string = "expiration time has passed"
+var (
+	ErrExpirationTime   = errors.New("expiration time has passed")
+	ErrTokenWrongLength = errors.New("token has wrong length")
+	ErrTokenInvalid     = errors.New("token invalid")
+	ErrWrongUser        = errors.New("wrong user")
 )
 
-func validateTokenUserID(rawToken string, secret string) (uuid.UUID, error) {
+func ValidateTokenUserID(rawToken string, secret string) (uuid.UUID, error) {
 	if len(rawToken) == 0 {
-		return uuid.UUID{}, errors.New("token needs length")
+		return uuid.UUID{}, ErrTokenWrongLength
 	}
 
 	claims := &jwt.StandardClaims{}
@@ -23,24 +27,29 @@ func validateTokenUserID(rawToken string, secret string) (uuid.UUID, error) {
 		return []byte(secret), nil
 	})
 	if err != nil {
+		if strings.Contains(err.Error(), "token is expired") {
+			return uuid.UUID{}, ErrExpirationTime
+		}
+
 		return uuid.UUID{}, err
 	}
 
 	if !token.Valid {
-		return uuid.UUID{}, errors.New("token invalid")
+		return uuid.UUID{}, ErrTokenInvalid
 	}
 
 	return uuid.Parse(claims.Issuer)
 }
 
-func newToken(
+func NewToken(
 	kind entity.TokenKind,
 	userID uuid.UUID,
 	secret string,
-	expiringTime time.Time,
+	expiringTime time.Duration,
 ) (entity.Token, error) {
+	expiringDate := time.Now().Add(expiringTime)
 	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, &jwt.StandardClaims{
-		ExpiresAt: expiringTime.Unix(),
+		ExpiresAt: expiringDate.Unix(),
 		Issuer:    userID.String(),
 	})
 	value, err := jwtToken.SignedString([]byte(secret))
@@ -52,67 +61,41 @@ func newToken(
 		Kind:      kind,
 		Value:     value,
 		UserID:    userID,
-		ExpiresAt: expiringTime,
+		ExpiresAt: expiringDate,
 	}, nil
 }
 
-type getRefreshedTokenParams struct {
-	authToken     string
-	refreshToken  string
-	authSecret    string
-	refreshSecret string
-	expiringTime  time.Time
+type GetRefreshedTokenParams struct {
+	AccessToken   string
+	RefreshToken  string
+	AuthSecret    string
+	RefreshSecret string
+	ExpiringTime  time.Duration
 }
 
-func getRefreshedToken(params getRefreshedTokenParams) (entity.Token, error) {
-	authToken := params.authToken
-	authSecret := params.authSecret
-	refreshToken := params.refreshToken
-	refreshSecret := params.refreshSecret
-	expiringTime := params.expiringTime
+func GetRefreshedToken(params GetRefreshedTokenParams) (entity.Token, error) {
+	accessToken := params.AccessToken
+	authSecret := params.AuthSecret
+	refreshToken := params.RefreshToken
+	refreshSecret := params.RefreshSecret
+	expiringTime := params.ExpiringTime
 
 	// check the auth token and retrieve the user id
-	authUserID, err := validateTokenUserID(authToken, authSecret)
-	if err != nil && err.Error() != expirationTimeError {
+	authUserID, err := ValidateTokenUserID(accessToken, authSecret)
+	if err != nil && err.Error() != ErrExpirationTime.Error() {
 		return entity.Token{}, err
 	}
 
 	// check the refresh token
-	refreshUserID, err := validateTokenUserID(refreshToken, refreshSecret)
+	refreshUserID, err := ValidateTokenUserID(refreshToken, refreshSecret)
 	if err != nil {
 		return entity.Token{}, err
 	}
 
 	// make sure the refresh and parsed are for the same user
 	if authUserID != refreshUserID {
-		return entity.Token{}, errors.New("wrong user id")
+		return entity.Token{}, ErrWrongUser
 	}
 
-	return newToken(entity.TokenKindAuth, refreshUserID, authSecret, expiringTime)
-}
-
-func getTokenKindSecretAndExpire(
-	kind entity.TokenKind,
-	secrets AuthSecrets,
-	expiringTimes AuthTokenExpirationTimes,
-) (string, time.Time) {
-	secret := ""
-	expiringTime := time.Now()
-
-	switch kind {
-	case entity.TokenKindAuth:
-		secret = secrets.TokenAuth
-		expiringTime = expiringTimes.Auth
-	case entity.TokenKindRefresh:
-		secret = secrets.TokenRefresh
-		expiringTime = expiringTimes.Refresh
-	case entity.TokenKindVerify:
-		secret = secrets.TokenVerify
-		expiringTime = expiringTimes.Verify
-	case entity.TokenKindResetPassword:
-		secret = secrets.TokenResetPassword
-		expiringTime = expiringTimes.ResetPassword
-	}
-
-	return secret, expiringTime
+	return NewToken(entity.TokenKindAccess, refreshUserID, authSecret, expiringTime)
 }
